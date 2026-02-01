@@ -1,5 +1,6 @@
 name: Node.js CI
 
+# This workflow runs only on pushes to the main branch.
 on:
   push:
     branches:
@@ -10,27 +11,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout the repository code
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Set up Node.js v20 with npm caching
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm" # Enable caching for npm dependencies
 
+      # 3. Install dependencies using npm ci
       - name: Install dependencies
         run: npm ci
 
+      # 4. Run the linter
       - name: Lint code
         run: npm run lint
 
+      # 5. Run the tests
+      # This step is expected to FAIL initially due to the intentional bug.
       - name: Run tests
         run: npm test
 
+      # 6. Build the application
       - name: Build application
         run: npm run build
 
+      # 7. Upload the 'dist' directory as a build artifact
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -38,65 +47,62 @@ jobs:
           path: dist/
 
   docker-smoke-test:
+    # This job runs in the DOCKERHUB environment
+    environment: DOCKERHUB
+    # This job depends on the successful completion of the build-and-test job
     needs: build-and-test
     runs-on: ubuntu-latest
+
+    # This job should only run on pushes to the main branch, after the test is fixed.
+    # We leave it enabled for all pushes to demonstrate the full pipeline.
+    # In a real project, you might add: if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 8. Build the Docker image
       - name: Build Docker image
-        run: docker build -t pornpimon163-451taskboard:${{ github.sha }} .
+        run: docker build -t pornpimon163/de451_tinytask:${{ github.sha }} .
 
-      - name: Remove old container (if any)
-        run: docker rm -f taskboard-app || true
-
+      # 9. Run the Docker container in detached mode
       - name: Run Docker container
-        run: docker run -d -p 3000:3000 --name taskboard-app pornpimon163-451taskboard:${{ github.sha }}
+        run: docker run -d -p 3000:3000 --name taskboard-app pornpimon163/de451_tinytask:${{ github.sha }}
 
-      - name: Smoke test with curl (health or root)
+      # 10. Smoke test the application with a retry loop
+      - name: Smoke test with curl
+        # This script tries to connect to the /health endpoint up to 10 times.
+        # It waits 5 seconds between retries. This gives the server time to start.
         run: |
-          set -e
           echo "Waiting for container to start..."
           for i in {1..10}; do
-            if curl -sf http://localhost:3000/health >/dev/null 2>&1 || curl -sf http://localhost:3000/ >/dev/null 2>&1; then
-              echo "Smoke test passed!"
+            if curl -sf http://localhost:3000/health; then
+              echo "Health check passed!"
               exit 0
             fi
             echo "Attempt $i failed. Retrying in 5 seconds..."
             sleep 5
           done
-
-          echo "Smoke test failed. Debug info:"
-          docker ps -a
-          docker logs taskboard-app || true
+          echo "Health check failed after 10 attempts."
           exit 1
 
+      # 11. Stop and remove the Docker container
       - name: Stop and remove container
+        # This step runs even if the smoke test fails, ensuring cleanup.
         if: always()
         run: |
-          docker stop taskboard-app || true
-          docker rm taskboard-app || true
+          docker logs taskboard-app
+          docker stop taskboard-app
+          docker rm taskboard-app
 
-  docker-push:
-    # ให้ push ขึ้น Docker Hub หลัง smoke test ผ่าน
-    needs: docker-smoke-test
-    runs-on: ubuntu-latest
-
-    # ✅ ตรงนี้แหละที่ใส่ environment: DOCKERHUB
-    environment: DOCKERHUB
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # ✅ ตรงนี้ใช้ secrets ที่คุณตั้งไว้ใน Environment DOCKERHUB
+      # 12. Log in to Docker Hub and push the image
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # 13. Push the Docker image to Docker Hub with tags
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -105,3 +111,4 @@ jobs:
           tags: |
             pornpimon163/de451_tinytask:latest
             pornpimon163/de451_tinytask:${{ github.sha }}
+            
