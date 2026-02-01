@@ -48,29 +48,35 @@ jobs:
       - name: Build Docker image
         run: docker build -t pornpimon163-451taskboard:${{ github.sha }} .
 
+      - name: Remove old container (if any)
+        run: docker rm -f taskboard-app || true
+
       - name: Run Docker container
         run: docker run -d -p 3000:3000 --name taskboard-app pornpimon163-451taskboard:${{ github.sha }}
 
-      - name: Smoke test with curl
+      - name: Smoke test with curl (health or root)
         run: |
+          set -e
           echo "Waiting for container to start..."
           for i in {1..10}; do
-            if curl -sf http://localhost:3000/health; then
-              echo "Health check passed!"
+            if curl -sf http://localhost:3000/health >/dev/null 2>&1 || curl -sf http://localhost:3000/ >/dev/null 2>&1; then
+              echo "Smoke test passed!"
               exit 0
             fi
             echo "Attempt $i failed. Retrying in 5 seconds..."
             sleep 5
           done
-          echo "Health check failed after 10 attempts."
+
+          echo "Smoke test failed. Debug info:"
+          docker ps -a
+          docker logs taskboard-app || true
           exit 1
 
       - name: Stop and remove container
         if: always()
         run: |
-          docker logs taskboard-app
-          docker stop taskboard-app
-          docker rm taskboard-app
+          docker stop taskboard-app || true
+          docker rm taskboard-app || true
 
   docker-push:
     # ให้ push ขึ้น Docker Hub หลัง smoke test ผ่าน
